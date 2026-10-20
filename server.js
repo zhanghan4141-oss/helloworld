@@ -1,17 +1,59 @@
 // 零依赖 Node 网页服务
-//   - 访问 /            随机展示一条不同的信息（每次刷新可能都不一样）
-//   - 访问 /api/message  返回随机信息的 JSON 接口（前端"换一条"按钮用）
-//   - 访问 /time /about  展示不同的静态信息页
-// 启动：node server.js  （或 npm start）
+//   - /            首页：随机展示一条不同的信息 + 实时时钟（WebSocket 每秒推送）
+//   - /api/message 随机信息 JSON 接口（前端"换一条"按钮用）
+//   - /time /about 静态信息页
+//   - /ws/time     WebSocket 实时时间
+// 启动：node server.js  （无任何第三方依赖）
 
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const CN_ZONE = 'Asia/Shanghai';
 
-// 随机信息池 —— 想加内容直接往数组里加
+// RFC 6455 规定的 WebSocket 握手魔术串。
+// Sec-WebSocket-Accept = base64(sha1(clientKey + 该串))，漏了或拼错浏览器会直接拒绝握手。
+const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+
+// 当前连接的 WebSocket 客户端 socket
+const wsClients = new Set();
+
+// ---------------- 北京时区工具 ----------------
+// 无论服务器跑在哪个时区，都以北京时间展示
+const CN_INTL = new Intl.DateTimeFormat('en-US', {
+  timeZone: CN_ZONE,
+  hourCycle: 'h23',
+  hour12: false,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
+function cnPart(date, type) {
+  return CN_INTL.formatToParts(date).find(p => p.type === type).value;
+}
+
+function formatChinaDateTime(date) {
+  // 形如 2026-10-20 21:56:44
+  return `${cnPart(date, 'year')}-${cnPart(date, 'month')}-${cnPart(date, 'day')} ` +
+         `${cnPart(date, 'hour')}:${cnPart(date, 'minute')}:${cnPart(date, 'second')}`;
+}
+
+function cnWallDate(date) {
+  // 构造一个 getHours() 等取到的就是北京墙钟时间的 Date
+  return new Date(
+    `${cnPart(date, 'year')}-${cnPart(date, 'month')}-${cnPart(date, 'day')}` +
+    `T${cnPart(date, 'hour')}:${cnPart(date, 'minute')}:${cnPart(date, 'second')}`
+  );
+}
+
+// ---------------- 随机信息池 ----------------
 const MESSAGES = [
   '人生得意须尽欢，莫使金樽空对月。',
   '如果你觉得现在很累，说明你在走上坡路。',
@@ -25,7 +67,7 @@ const MESSAGES = [
   '别怕失败，反正还有 99 个随机种子可以重试。',
 ];
 
-// 按小时给不同的问候语
+// 按北京时间的钟点给不同的问候语
 function getGreeting(date) {
   const h = date.getHours();
   if (h < 5) return '夜深了，还没睡吗？';
@@ -48,11 +90,69 @@ function pickMessage() {
   return MESSAGES[i];
 }
 
-// 几项静态信息页
+// ---------------- WebSocket（手工实现，零依赖） ----------------
+// 握手：校验请求头里的 sec-websocket-key，按 RFC 6455 计算 Accept 并返回 101
+function handleUpgrade(req, socket) {
+  const key = req.headers['sec-websocket-key'];
+  if (!key) {
+    socket.destroy();
+    return;
+  }
+  const accept = crypto
+    .createHash('sha1')
+    .update(key + WS_MAGIC)
+    .digest('base64');
+
+  socket.write(
+    'HTTP/1.1 101 Switching Protocols\r\n' +
+      'Upgrade: websocket\r\n' +
+      'Connection: Upgrade\r\n' +
+      `Sec-WebSocket-Accept: ${accept}\r\n` +
+      '\r\n'
+  );
+
+  wsClients.add(socket);
+  const remove = () => wsClients.delete(socket);
+  socket.on('close', remove);
+  socket.on('error', remove);
+}
+
+// 服务端 -> 客户端文本帧（发送方不需要掩码）
+function encodeTextFrame(text) {
+  const payload = Buffer.from(text, 'utf8');
+  const header = [0x81]; // FIN + 文本帧(0x1)
+  if (payload.length < 126) {
+    header.push(payload.length);
+  } else if (payload.length <= 0xffff) {
+    header.push(126, (payload.length >> 8) & 0xff, payload.length & 0xff);
+  } else {
+    header.push(
+      127, 0, 0, 0, 0,
+      (payload.length >> 24) & 0xff,
+      (payload.length >> 16) & 0xff,
+      (payload.length >> 8) & 0xff,
+      payload.length & 0xff
+    );
+  }
+  return Buffer.concat([Buffer.from(header), payload]);
+}
+
+// 每秒给所有已连接客户端推一条实时时间
+setInterval(() => {
+  const frame = encodeTextFrame(JSON.stringify({
+    type: 'time',
+    time: formatChinaDateTime(new Date()),
+  }));
+  for (const socket of wsClients) {
+    if (!socket.destroyed) socket.write(frame);
+  }
+}, 1000);
+
+// ---------------- 静态信息页 ----------------
 const PAGES = {
   '/time': {
     title: '当前时间',
-    render: (now) => now.toLocaleString('zh-CN'),
+    render: (now) => formatChinaDateTime(now),
     note: '这条信息是每次访问时实时生成的，刷新就会变。',
   },
   '/about': {
@@ -113,6 +213,7 @@ function renderPage({ title, body, note }) {
 </html>`;
 }
 
+// ---------------- HTTP 路由 ----------------
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
@@ -122,8 +223,8 @@ const server = http.createServer((req, res) => {
     const now = new Date();
     return sendJson(res, {
       message: pickMessage(),
-      greeting: getGreeting(now),
-      date: now.toLocaleString('zh-CN'),
+      greeting: getGreeting(cnWallDate(now)),
+      date: formatChinaDateTime(now),
       ip: req.socket.remoteAddress,
     });
   }
@@ -156,10 +257,17 @@ const server = http.createServer((req, res) => {
   }));
 });
 
+// WebSocket 升级请求走这里，不走普通 HTTP 路由
+server.on('upgrade', (req, socket) => {
+  if (req.url === '/ws/time') handleUpgrade(req, socket);
+  else socket.destroy();
+});
+
 server.listen(PORT, () => {
   console.log(`服务已启动：http://localhost:${PORT}`);
-  console.log('  /            首页（随机信息）');
+  console.log('  /            首页（随机信息 + 实时时钟）');
   console.log('  /time        当前时间页');
   console.log('  /about       关于页');
   console.log('  /api/message 随机信息接口');
+  console.log('  /ws/time     WebSocket 实时时间');
 });

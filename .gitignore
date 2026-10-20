@@ -1,3 +1,5 @@
 node_modules/
 *.log
 .DS_Store
+# 浏览器调试快照
+.playwright-mcp/

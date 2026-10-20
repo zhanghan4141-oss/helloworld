@@ -40,6 +40,13 @@
     button:hover { transform: translateY(-1px); }
     button:active { transform: translateY(1px); }
     button:disabled { opacity: .5; cursor: wait; }
+    .ws-time {
+      font-size: clamp(24px, 7.5vw, 34px); font-weight: 700; color: var(--accent);
+      margin: 0 0 6px; font-variant-numeric: tabular-nums; letter-spacing: 1px;
+    }
+    .ws-status { font-size: 12px; margin: 0 0 18px; }
+    .ws-status.connected { color: #2ecc71; }
+    .ws-status.disconnected { color: #e74c3c; }
     .links { margin-top: 22px; font-size: 13px; color: var(--muted); }
     .links a { color: var(--accent); text-decoration: none; margin: 0 8px; }
     .links a:hover { text-decoration: underline; }
@@ -48,6 +55,8 @@
 <body>
   <main class="card">
     <h1>🍩 Hello World 信息站</h1>
+    <p class="ws-time" id="wsTime">--:--:--</p>
+    <p class="ws-status disconnected" id="wsStatus">⏳ 正在连接实时时钟…</p>
     <p class="greet" id="greeting">正在读取问候语…</p>
     <p class="big" id="message">正在获取随机信息…</p>
     <p class="meta" id="meta">加载中…</p>
@@ -59,6 +68,34 @@
   </main>
 
   <script>
+    // ===== WebSocket 实时时钟 =====
+    const elTime = document.getElementById('wsTime');
+    const elStatus = document.getElementById('wsStatus');
+    let ws = null;
+
+    function connectWs() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(proto + '//' + location.host + '/ws/time');
+      ws.onopen = () => {
+        elStatus.textContent = '🟢 实时时钟已连接';
+        elStatus.className = 'ws-status connected';
+      };
+      ws.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type === 'time') elTime.textContent = data.time;
+        } catch (err) { /* 忽略损坏的帧 */ }
+      };
+      ws.onclose = () => {
+        elStatus.textContent = '🔴 连接断开，3秒后重连…';
+        elStatus.className = 'ws-status disconnected';
+        setTimeout(connectWs, 3000);
+      };
+      ws.onerror = () => ws.close();
+    }
+    connectWs();
+
+    // ===== 原有功能：随机信息 =====
     const elGreet = document.getElementById('greeting');
     const elMsg = document.getElementById('message');
     const elMeta = document.getElementById('meta');

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hello World 信息站</title>
+  <style>
+    :root {
+      --bg: #f5f6fa; --card: #ffffff; --text: #333; --muted: #888;
+      --accent: #4f6ef2; --btn: #4f6ef2; --btn-text: #fff;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #17181d; --card: #23252d; --text: #eee; --muted: #999; --btn: #5b7bff; }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(135deg, var(--bg), var(--card));
+      padding: 16px;
+    }
+    .card {
+      background: var(--card); border-radius: 18px; padding: 36px 40px;
+      max-width: 580px; width: 100%;
+      box-shadow: 0 10px 30px rgba(0,0,0,.12); text-align: center;
+    }
+    h1 { font-size: 20px; color: var(--accent); margin: 0 0 18px; }
+    .greet { font-size: 15px; color: var(--muted); margin: 0 0 16px; }
+    .big {
+      font-size: 28px; line-height: 1.7; margin: 0 0 24px; color: var(--text);
+      min-height: 3.4em; display: flex; align-items: center; justify-content: center;
+    }
+    .meta { font-size: 13px; color: var(--muted); line-height: 2; margin: 0 0 26px; }
+    .meta b { color: var(--text); font-weight: 600; }
+    button {
+      border: none; border-radius: 999px; padding: 12px 34px; font-size: 16px;
+      background: var(--btn); color: var(--btn-text); cursor: pointer;
+      transition: transform .1s, opacity .2s; font-family: inherit;
+    }
+    button:hover { transform: translateY(-1px); }
+    button:active { transform: translateY(1px); }
+    button:disabled { opacity: .5; cursor: wait; }
+    .links { margin-top: 22px; font-size: 13px; color: var(--muted); }
+    .links a { color: var(--accent); text-decoration: none; margin: 0 8px; }
+    .links a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>🍩 Hello World 信息站</h1>
+    <p class="greet" id="greeting">正在读取问候语…</p>
+    <p class="big" id="message">正在获取随机信息…</p>
+    <p class="meta" id="meta">加载中…</p>
+    <button id="next">换一条信息</button>
+    <p class="links">
+      <a href="/time">当前时间</a>
+      <a href="/about">关于本站</a>
+    </p>
+  </main>
+
+  <script>
+    const elGreet = document.getElementById('greeting');
+    const elMsg = document.getElementById('message');
+    const elMeta = document.getElementById('meta');
+    const btn = document.getElementById('next');
+
+    async function fetchMessage() {
+      btn.disabled = true;
+      btn.textContent = '加载中…';
+      try {
+        const res = await fetch('/api/message');
+        const data = await res.json();
+        elGreet.textContent = data.greeting;
+        elMsg.textContent = data.message;
+        elMeta.innerHTML =
+          '🕐 服务器时间：<b>' + data.date + '</b><br>' +
+          '📮 你的 IP：<b>' + data.ip + '</b> · UA：<b>' + navigator.userAgent.slice(0, 40) + '…</b>';
+      } catch (e) {
+        elMsg.textContent = '获取信息失败：' + e.message;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '换一条信息';
+      }
+    }
+
+    btn.addEventListener('click', fetchMessage);
+    fetchMessage();
+  </script>
+</body>
+</html>

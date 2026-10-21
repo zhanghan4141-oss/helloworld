@@ -58,6 +58,22 @@ function cnWallDate(date) {
   );
 }
 
+// ---------------- 日志 ----------------
+// 同时输出到控制台和 server.log 文件，挂了也有据可查（时间戳统一北京时间）
+const LOG_FILE = path.join(__dirname, 'server.log');
+const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
+
+function logTime() {
+  return `${cnPart(new Date(), 'year')}-${cnPart(new Date(), 'month')}-${cnPart(new Date(), 'day')} ` +
+         `${cnPart(new Date(), 'hour')}:${cnPart(new Date(), 'minute')}:${cnPart(new Date(), 'second')}`;
+}
+
+function log(...args) {
+  const line = `[${logTime()}] ${args.join(' ')}`;
+  try { logStream.write(line + '\n'); } catch (_) {}
+  console.log(line);
+}
+
 // ---------------- 随机信息池 ----------------
 const MESSAGES = [
   '人生得意须尽欢，莫使金樽空对月。',
@@ -108,6 +124,7 @@ function handleUpgrade(req, socket) {
   const ip = socket.remoteAddress;
   const ipCount = wsCountByIp.get(ip) || 0;
   if (wsClients.size >= MAX_WS_CONNECTIONS || ipCount >= MAX_WS_PER_IP) {
+    log(`WS 拒绝 ${ip}（全局 ${wsClients.size}/${MAX_WS_CONNECTIONS}，该 IP ${ipCount}/${MAX_WS_PER_IP}）`);
     socket.destroy();
     return;
   }
@@ -127,11 +144,13 @@ function handleUpgrade(req, socket) {
 
   wsClients.add(socket);
   wsCountByIp.set(ip, ipCount + 1);
+  log(`WS 连接 ${ip} · 当前并发 ${wsClients.size}/${MAX_WS_CONNECTIONS}`);
   const remove = () => {
     wsClients.delete(socket);
     const rest = (wsCountByIp.get(ip) || 1) - 1;
     if (rest > 0) wsCountByIp.set(ip, rest);
     else wsCountByIp.delete(ip);
+    log(`WS 断开 ${ip} · 当前并发 ${wsClients.size}/${MAX_WS_CONNECTIONS}`);
   };
   socket.on('close', remove);
   socket.on('error', remove);
@@ -248,6 +267,13 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
 
+  // 请求日志：方法、路径、状态码、耗时、来源 IP
+  const startAt = Date.now();
+  const reqIp = req.socket.remoteAddress;
+  res.on('finish', () => {
+    log(`${req.method} ${pathname} -> ${res.statusCode} ${Date.now() - startAt}ms ${reqIp}`);
+  });
+
   // API：随机一条信息
   if (pathname === '/api/message') {
     const now = new Date();
@@ -290,14 +316,29 @@ const server = http.createServer((req, res) => {
 // WebSocket 升级请求走这里，不走普通 HTTP 路由
 server.on('upgrade', (req, socket) => {
   if (req.url === '/ws/time') handleUpgrade(req, socket);
-  else socket.destroy();
+  else {
+    log(`WS 拒绝未知路径 ${req.url} ${socket.remoteAddress}`);
+    socket.destroy();
+  }
+});
+
+// ---------------- 进程级兜底：崩溃也要留下原因 ----------------
+process.on('uncaughtException', (err) => {
+  const line = `[${logTime()}] [FATAL] 未捕获异常，进程即将退出:\n${err && err.stack ? err.stack : err}`;
+  try { fs.appendFileSync(LOG_FILE, '\n' + line + '\n'); } catch (_) {}
+  console.error(line);
+  process.exit(1); // 退出，交给 pm2/systemd 拉起
+});
+
+process.on('unhandledRejection', (reason) => {
+  log('[WARN] 未处理的 Promise 拒绝:', reason && reason.stack ? reason.stack : reason);
 });
 
 server.listen(PORT, () => {
-  console.log(`服务已启动：http://localhost:${PORT}`);
-  console.log('  /            首页（随机信息 + 实时时钟）');
-  console.log('  /time        当前时间页');
-  console.log('  /about       关于页');
-  console.log('  /api/message 随机信息接口');
-  console.log('  /ws/time     WebSocket 实时时间');
+  log(`服务已启动 · PID ${process.pid} · http://localhost:${PORT} · 日志: ${LOG_FILE}`);
+  log('  /            首页（随机信息 + 实时时钟）');
+  log('  /time        当前时间页');
+  log('  /about       关于页');
+  log('  /api/message 随机信息接口');
+  log('  /ws/time     WebSocket 实时时间');
 });

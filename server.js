@@ -75,16 +75,45 @@ function log(...args) {
 }
 
 // ---------------- 数据库（mysql2）----------------
+// 凭据一律只从环境变量读取，仓库里不保存任何真实密码
 const mysql = require('mysql2/promise');
+const DB_PASS = process.env.DB_PASS || '';
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'helloworld',
-  password: process.env.DB_PASS || 'hw2026secure',
+  password: DB_PASS,
   database: process.env.DB_NAME || 'helloworld',
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
 });
+if (!DB_PASS) log('[WARN] 未设置环境变量 DB_PASS（数据库密码）。若数据库有密码，留言接口将返回 "数据库查询失败"。');
+
+// ---------------- 留言写入防护 ----------------
+// 1) 按 IP 限频：每分钟最多 POST_MAX_PER_MIN 次（默认 10，可用环境变量覆盖）
+const POST_MAX_PER_MIN = parseInt(process.env.POST_MAX_PER_MIN || '10', 10);
+const postWindow = new Map(); // ip -> { count, startAt }
+function postAllowed(ip) {
+  const now = Date.now();
+  const rec = postWindow.get(ip);
+  if (!rec || now - rec.startAt >= 60000) {
+    postWindow.set(ip, { count: 1, startAt: now });
+    return true;
+  }
+  if (rec.count >= POST_MAX_PER_MIN) return false;
+  rec.count += 1;
+  return true;
+}
+// 定期清理过期的 IP 记录，防止内存无限增长
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, rec] of postWindow) {
+    if (now - rec.startAt >= 60000) postWindow.delete(ip);
+  }
+}, 60000).unref();
+
+// 2) POST body 大小上限：留言上限 2000 字符 + JSON 结构，4KB 足够
+const MAX_BODY_BYTES = 4096;
 
 // GET /api/messages → { messages: [{ id, content, created_at }] }
 async function handleGetMessages(res) {
@@ -93,19 +122,45 @@ async function handleGetMessages(res) {
     sendJson(res, { messages: rows });
   } catch (err) {
     log('[ERROR] GET /api/messages:', err.message);
-    sendJson(res, { error: '数据库查询失败' });
+    sendJson(res, { error: '数据库查询失败' }, 500);
   }
 }
 
 // POST /api/messages ← { content } → { id, content, created_at } | { error }
-async function handlePostMessages(req, res) {
+// 带按 IP 限频、仅收 JSON、body 上限三重保护
+async function handlePostMessages(req, res, ip) {
+  if (!postAllowed(ip)) {
+    log(`POST /api/messages 限频拒绝 ${ip}`);
+    return sendJson(res, { error: '操作太频繁，请稍后再试' }, 429);
+  }
+  const ctype = req.headers['content-type'] || '';
+  if (!ctype.includes('application/json')) {
+    log(`POST /api/messages 非 JSON 拒绝 ${ip}`);
+    return sendJson(res, { error: '请使用 application/json' }, 415);
+  }
   let body = '';
-  req.on('data', chunk => { body += chunk; });
+  let tooBig = false;
+  req.on('data', (chunk) => {
+    if (tooBig) return;
+    body += chunk;
+    if (body.length > MAX_BODY_BYTES) {
+      tooBig = true;
+      body = '';
+      log(`POST /api/messages body 超限拒绝 ${ip}`);
+    }
+  });
   req.on('end', async () => {
     try {
-      const { content } = JSON.parse(body || '{}');
+      if (tooBig) return sendJson(res, { error: '内容过大' }, 413);
+      let payload;
+      try {
+        payload = JSON.parse(body || '{}');
+      } catch (e) {
+        return sendJson(res, { error: '请求格式不正确' }, 400);
+      }
+      const { content } = payload;
       if (!content || !String(content).trim()) {
-        return sendJson(res, { error: '内容不能为空' });
+        return sendJson(res, { error: '内容不能为空' }, 400);
       }
       const trimmed = String(content).trim().slice(0, 2000);
       const [result] = await pool.query('INSERT INTO messages (content) VALUES (?)', [trimmed]);
@@ -113,7 +168,7 @@ async function handlePostMessages(req, res) {
       sendJson(res, rows[0] || { id: result.insertId, content: trimmed, created_at: new Date() });
     } catch (err) {
       log('[ERROR] POST /api/messages:', err.message);
-      sendJson(res, { error: '保存失败' });
+      sendJson(res, { error: '保存失败' }, 500);
     }
   });
 }
@@ -255,8 +310,8 @@ const PAGES = {
   },
 };
 
-function sendJson(res, data) {
-  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+function sendJson(res, data, status = 200) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(data));
 }
 
@@ -323,7 +378,7 @@ const server = http.createServer((req, res) => {
     return handleGetMessages(res);
   }
   if (pathname === '/api/messages' && req.method === 'POST') {
-    return handlePostMessages(req, res);
+    return handlePostMessages(req, res, req.socket.remoteAddress);
   }
   // API：随机一条信息
   if (pathname === '/api/message') {

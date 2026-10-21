@@ -1,7 +1,7 @@
 {
   "name": "hello-world-info",
   "version": "1.0.0",
-  "description": "一个随机展示不同信息的 Node 网页服务（零依赖）",
+  "description": "留言展示网页服务（Node 原生 http + mysql2），依赖见 dependencies",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

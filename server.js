@@ -21,6 +21,11 @@ const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 // 当前连接的 WebSocket 客户端 socket
 const wsClients = new Set();
 
+// 连接数上限，防止被机器人连接轰炸拖垮进程
+const MAX_WS_CONNECTIONS = 50; // 全局并发上限
+const MAX_WS_PER_IP = 5;       // 单 IP 上限
+const wsCountByIp = new Map();
+
 // ---------------- 北京时区工具 ----------------
 // 无论服务器跑在哪个时区，都以北京时间展示
 const CN_INTL = new Intl.DateTimeFormat('en-US', {
@@ -98,6 +103,15 @@ function handleUpgrade(req, socket) {
     socket.destroy();
     return;
   }
+
+  // 连接数保护：达到上限直接拒绝，避免连接轰炸拖垮进程
+  const ip = socket.remoteAddress;
+  const ipCount = wsCountByIp.get(ip) || 0;
+  if (wsClients.size >= MAX_WS_CONNECTIONS || ipCount >= MAX_WS_PER_IP) {
+    socket.destroy();
+    return;
+  }
+
   const accept = crypto
     .createHash('sha1')
     .update(key + WS_MAGIC)
@@ -112,7 +126,13 @@ function handleUpgrade(req, socket) {
   );
 
   wsClients.add(socket);
-  const remove = () => wsClients.delete(socket);
+  wsCountByIp.set(ip, ipCount + 1);
+  const remove = () => {
+    wsClients.delete(socket);
+    const rest = (wsCountByIp.get(ip) || 1) - 1;
+    if (rest > 0) wsCountByIp.set(ip, rest);
+    else wsCountByIp.delete(ip);
+  };
   socket.on('close', remove);
   socket.on('error', remove);
 }
@@ -149,6 +169,16 @@ setInterval(() => {
 }, 1000);
 
 // ---------------- 静态信息页 ----------------
+// 从函数外传入的路径等文本一律先转义，避免反射进 HTML
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const PAGES = {
   '/time': {
     title: '当前时间',
@@ -249,10 +279,10 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 其他路径：提示信息
+  // 其他路径：提示信息（路径文本已转义，防止反射 XSS）
   sendHtml(res, renderPage({
     title: '网页找到了信息，但没有这个页面',
-    body: `路径「${pathname}」不存在`,
+    body: `路径「${escapeHtml(pathname)}」不存在`,
     note: '试试换一个路径，谁知道会看到什么不同的信息呢。',
   }));
 });

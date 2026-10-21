@@ -74,6 +74,50 @@ function log(...args) {
   console.log(line);
 }
 
+// ---------------- 数据库（mysql2）----------------
+const mysql = require('mysql2/promise');
+const pool = mysql.createPool({
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'helloworld',
+  password: process.env.DB_PASS || 'hw2026secure',
+  database: process.env.DB_NAME || 'helloworld',
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+});
+
+// GET /api/messages → { messages: [{ id, content, created_at }] }
+async function handleGetMessages(res) {
+  try {
+    const [rows] = await pool.query('SELECT id, content, created_at FROM messages ORDER BY id DESC LIMIT 100');
+    sendJson(res, { messages: rows });
+  } catch (err) {
+    log('[ERROR] GET /api/messages:', err.message);
+    sendJson(res, { error: '数据库查询失败' });
+  }
+}
+
+// POST /api/messages ← { content } → { id, content, created_at } | { error }
+async function handlePostMessages(req, res) {
+  let body = '';
+  req.on('data', chunk => { body += chunk; });
+  req.on('end', async () => {
+    try {
+      const { content } = JSON.parse(body || '{}');
+      if (!content || !String(content).trim()) {
+        return sendJson(res, { error: '内容不能为空' });
+      }
+      const trimmed = String(content).trim().slice(0, 2000);
+      const [result] = await pool.query('INSERT INTO messages (content) VALUES (?)', [trimmed]);
+      const [rows] = await pool.query('SELECT id, content, created_at FROM messages WHERE id = ?', [result.insertId]);
+      sendJson(res, rows[0] || { id: result.insertId, content: trimmed, created_at: new Date() });
+    } catch (err) {
+      log('[ERROR] POST /api/messages:', err.message);
+      sendJson(res, { error: '保存失败' });
+    }
+  });
+}
+
 // ---------------- 随机信息池 ----------------
 const MESSAGES = [
   '人生得意须尽欢，莫使金樽空对月。',
@@ -274,6 +318,13 @@ const server = http.createServer((req, res) => {
     log(`${req.method} ${pathname} -> ${res.statusCode} ${Date.now() - startAt}ms ${reqIp}`);
   });
 
+  // API：留言列表（数据库）
+  if (pathname === '/api/messages' && req.method === 'GET') {
+    return handleGetMessages(res);
+  }
+  if (pathname === '/api/messages' && req.method === 'POST') {
+    return handlePostMessages(req, res);
+  }
   // API：随机一条信息
   if (pathname === '/api/message') {
     const now = new Date();

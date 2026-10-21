@@ -74,6 +74,24 @@ function log(...args) {
   console.log(line);
 }
 
+// ---------------- .env 轻量加载 ----------------
+// 读项目目录下的 .env（gitignored，不会进仓库），DB_PASS 等放这里；
+// 已存在的环境变量优先，不覆盖。
+try {
+  const envFile = path.join(__dirname, '.env');
+  if (fs.existsSync(envFile)) {
+    for (const line of fs.readFileSync(envFile, 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(.*?)[ \t]*$/);
+      if (m && !(m[1] in process.env)) {
+        process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
+      }
+    }
+    log('[INFO] 已加载 .env 环境变量');
+  }
+} catch (err) {
+  log('[WARN] .env 加载失败:', err.message);
+}
+
 // ---------------- 数据库（mysql2）----------------
 // 凭据一律只从环境变量读取，仓库里不保存任何真实密码
 const mysql = require('mysql2/promise');

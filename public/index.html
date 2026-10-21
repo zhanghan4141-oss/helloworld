@@ -50,6 +50,28 @@
     .links { margin-top: 22px; font-size: 13px; color: var(--muted); }
     .links a { color: var(--accent); text-decoration: none; margin: 0 8px; }
     .links a:hover { text-decoration: underline; }
+
+    /* ===== 新增：输入框 & 消息列表样式 ===== */
+    .input-section { margin: 24px 0 0; text-align: left; border-top: 1px solid rgba(128,128,128,.2); padding-top: 20px; }
+    .input-section h2 { font-size: 16px; color: var(--accent); margin: 0 0 12px; text-align: center; }
+    .input-row { display: flex; gap: 8px; margin-bottom: 14px; }
+    .input-row input {
+      flex: 1; padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(128,128,128,.3);
+      font-size: 14px; background: var(--bg); color: var(--text); outline: none; font-family: inherit;
+    }
+    .input-row input:focus { border-color: var(--accent); }
+    .input-row button { padding: 10px 22px; font-size: 14px; border-radius: 10px; white-space: nowrap; }
+    .msg-list { list-style: none; padding: 0; margin: 0; max-height: 260px; overflow-y: auto; text-align: left; }
+    .msg-list li {
+      padding: 10px 14px; margin-bottom: 6px; border-radius: 10px;
+      background: var(--bg); font-size: 13px; color: var(--text); line-height: 1.6;
+      word-break: break-word;
+    }
+    .msg-list li .msg-time { font-size: 11px; color: var(--muted); margin-top: 4px; display: block; }
+    .msg-empty { text-align: center; color: var(--muted); font-size: 13px; padding: 16px 0; }
+    .save-tip { font-size: 12px; text-align: center; margin-top: 6px; min-height: 18px; }
+    .save-tip.ok { color: #2ecc71; }
+    .save-tip.err { color: #e74c3c; }
   </style>
 </head>
 <body>
@@ -61,18 +83,28 @@
     <p class="big" id="message">正在获取随机信息…</p>
     <p class="meta" id="meta">加载中…</p>
     <button id="next">换一条信息</button>
+
+    <!-- 新增：文本输入 & 历史消息 -->
+    <div class="input-section">
+      <h2>💬 留言存入数据库</h2>
+      <div class="input-row">
+        <input type="text" id="msgInput" placeholder="输入你想说的话…" maxlength="2000" />
+        <button id="saveBtn">保存</button>
+      </div>
+      <p class="save-tip" id="saveTip"></p>
+      <ul class="msg-list" id="msgList"><li class="msg-empty">加载中…</li></ul>
+    </div>
+
     <p class="links">
       <a href="/time">当前时间</a>
       <a href="/about">关于本站</a>
     </p>
   </main>
-
   <script>
     // ===== WebSocket 实时时钟 =====
     const elTime = document.getElementById('wsTime');
     const elStatus = document.getElementById('wsStatus');
     let ws = null;
-
     function connectWs() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       ws = new WebSocket(proto + '//' + location.host + '/ws/time');
@@ -100,7 +132,6 @@
     const elMsg = document.getElementById('message');
     const elMeta = document.getElementById('meta');
     const btn = document.getElementById('next');
-
     async function fetchMessage() {
       btn.disabled = true;
       btn.textContent = '加载中…';
@@ -119,9 +150,78 @@
         btn.textContent = '换一条信息';
       }
     }
-
     btn.addEventListener('click', fetchMessage);
     fetchMessage();
+
+    // ===== 新增：保存消息 & 加载列表 =====
+    const msgInput = document.getElementById('msgInput');
+    const saveBtn = document.getElementById('saveBtn');
+    const saveTip = document.getElementById('saveTip');
+    const msgList = document.getElementById('msgList');
+
+    function formatTime(dateStr) {
+      if (!dateStr) return '';
+      const d = new Date(dateStr);
+      const pad = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    async function loadMessages() {
+      try {
+        const res = await fetch('/api/messages');
+        const data = await res.json();
+        if (data.error) { msgList.innerHTML = '<li class="msg-empty">' + data.error + '</li>'; return; }
+        if (!data.messages || data.messages.length === 0) {
+          msgList.innerHTML = '<li class="msg-empty">暂无留言，来说点什么吧 ✨</li>';
+          return;
+        }
+        msgList.innerHTML = data.messages.map(m =>
+          '<li>' + escapeHtml(m.content) + '<span class="msg-time">#' + m.id + ' · ' + formatTime(m.created_at) + '</span></li>'
+        ).join('');
+      } catch (e) {
+        msgList.innerHTML = '<li class="msg-empty">加载失败：' + e.message + '</li>';
+      }
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    async function saveMessage() {
+      const content = msgInput.value.trim();
+      if (!content) { showTip('请输入内容', false); return; }
+      saveBtn.disabled = true;
+      saveBtn.textContent = '保存中…';
+      showTip('', true);
+      try {
+        const res = await fetch('/api/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content })
+        });
+        const data = await res.json();
+        if (data.error) { showTip(data.error, false); }
+        else {
+          showTip('✅ 保存成功！', true);
+          msgInput.value = '';
+          loadMessages();
+        }
+      } catch (e) {
+        showTip('保存失败：' + e.message, false);
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '保存';
+      }
+    }
+
+    function showTip(text, ok) {
+      saveTip.textContent = text;
+      saveTip.className = 'save-tip ' + (ok ? 'ok' : 'err');
+    }
+
+    saveBtn.addEventListener('click', saveMessage);
+    msgInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveMessage(); });
+    loadMessages();
   </script>
 </body>
 </html>

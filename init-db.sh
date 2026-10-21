@@ -35,7 +35,7 @@ printf 'DB_PASS=%s\n' "$PASSWORD" > "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 echo "==> 密码已写入 $ENV_FILE（gitignore，不上传仓库；权限 600）"
 
-mysql -u root -p <<SQL
+sudo mysql <<SQL
 CREATE DATABASE IF NOT EXISTS helloworld DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS 'helloworld'@'localhost' IDENTIFIED BY '${PASSWORD}';
 GRANT ALL PRIVILEGES ON helloworld.* TO 'helloworld'@'localhost';

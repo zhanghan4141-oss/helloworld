@@ -96,8 +96,8 @@
     </div>
 
     <p class="links">
-      <a href="/time">当前时间</a>
-      <a href="/about">关于本站</a>
+      <a href="/helloworld/time">当前时间</a>
+      <a href="/helloworld/about">关于本站</a>
     </p>
   </main>
   <script>
@@ -107,7 +107,7 @@
     let ws = null;
     function connectWs() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(proto + '//' + location.host + '/ws/time');
+      ws = new WebSocket(proto + '//' + location.host + '/helloworld/ws/time');
       ws.onopen = () => {
         elStatus.textContent = '🟢 实时时钟已连接';
         elStatus.className = 'ws-status connected';
@@ -136,7 +136,7 @@
       btn.disabled = true;
       btn.textContent = '加载中…';
       try {
-        const res = await fetch('/api/message');
+        const res = await fetch('/helloworld/api/message');
         const data = await res.json();
         elGreet.textContent = data.greeting;
         elMsg.textContent = data.message;
@@ -168,7 +168,7 @@
 
     async function loadMessages() {
       try {
-        const res = await fetch('/api/messages');
+        const res = await fetch('/helloworld/api/messages');
         const data = await res.json();
         if (data.error) { msgList.innerHTML = '<li class="msg-empty">' + data.error + '</li>'; return; }
         if (!data.messages || data.messages.length === 0) {
@@ -194,7 +194,7 @@
       saveBtn.textContent = '保存中…';
       showTip('', true);
       try {
-        const res = await fetch('/api/messages', {
+        const res = await fetch('/helloworld/api/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ content })
